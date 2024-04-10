@@ -21,7 +21,6 @@ class KTdashboard:
 
         # read in the cachefile, retry until file is non-empty
         self.cache_file_handle = open(cache_file, "r")
-        print("Opening cache file, waiting for non-empty")
         filestr = ""
         data = []
         while not data:
@@ -121,7 +120,7 @@ class KTdashboard:
         y = yvariable
 
         f = figure(**self.plot_options)
-        f.circle(x, y, size=12, color=color, alpha=0.5, source=self.source)
+        f.scatter(x, y, size=12, color=color, alpha=0.5, source=self.source)
         f.xaxis.axis_label = x
         f.yaxis.axis_label = y
 
