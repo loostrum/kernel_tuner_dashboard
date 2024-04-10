@@ -2,6 +2,7 @@
 import json
 import sys
 import os
+import argparse
 
 import panel as pn
 import panel.widgets as pnw
@@ -16,28 +17,38 @@ class KTdashboard:
     def __init__(self, cache_file, demo=False):
         self.demo = demo
         self.cache_file = cache_file
+        self.cache_file_handle = None
 
-        # read in the cachefile
+        # read in the cachefile, retry until file is non-empty
         self.cache_file_handle = open(cache_file, "r")
-        filestr = self.cache_file_handle.read().strip()
-        # if file was not properly closed, pretend it was properly closed
-        if not filestr[-3:] == "}\n}":
-            # remove the trailing comma if any, and append closing brackets
-            if filestr[-1] == ",":
-                filestr = filestr[:-1]
-            filestr = filestr + "}\n}"
+        print("Opening cache file, waiting for non-empty")
+        filestr = ""
+        data = []
+        while not data:
+            self.cache_file_handle.seek(0)
+            filestr = self.cache_file_handle.read().strip()
+            while not filestr:
+                self.cache_file_handle.seek(0)
+                filestr = self.cache_file_handle.read().strip()
 
-        cached_data = json.loads(filestr)
-        self.kernel_name = cached_data["kernel_name"]
-        self.device_name = cached_data["device_name"]
-        if "objective" in cached_data:
-            self.objective = cached_data["objective"]
-        else:
-            self.objective = "time"
+            # if file was not properly closed, pretend it was properly closed
+            if not filestr[-3:] == "}\n}":
+                # remove the trailing comma if any, and append closing brackets
+                if filestr[-1] == ",":
+                    filestr = filestr[:-1]
+                filestr = filestr + "}\n}"
 
-        # get the performance data
-        data = list(cached_data["cache"].values())
-        data = [d for d in data if d[self.objective] != 1e20 and not isinstance(d[self.objective], str)]
+            cached_data = json.loads(filestr)
+            self.kernel_name = cached_data["kernel_name"]
+            self.device_name = cached_data["device_name"]
+            if "objective" in cached_data:
+                self.objective = cached_data["objective"]
+            else:
+                self.objective = "time"
+
+            # get the performance data
+            data = list(cached_data["cache"].values())
+            data = [d for d in data if d[self.objective] != 1e20 and not isinstance(d[self.objective], str)]
 
         # use all data or just the first 1000 records in demo mode
         self.index = len(data)
@@ -61,7 +72,7 @@ class KTdashboard:
         self.source = ColumnDataSource(data=self.data_df)
         self.data = data
 
-        plot_options=dict(height=600, width=900)
+        plot_options=dict(height=500, width=900)
         plot_options['tools'] = [HoverTool(tooltips=[(k, "@{"+k+"}" + ("{0.00}" if k in float_keys else "")) for k in single_value_keys]), "box_select,box_zoom,save,reset"]
 
         self.plot_options = plot_options
@@ -74,9 +85,12 @@ class KTdashboard:
                 default_key = single_Value_keys[0]
 
         # setup widgets
-        self.yvariable = pnw.Select(name='Y', value=default_key, options=single_value_keys)
-        self.xvariable = pnw.Select(name='X', value='index', options=['index']+single_value_keys)
-        self.colorvariable = pnw.Select(name='Color By', value=default_key, options=single_value_keys)
+        #self.yvariable = pnw.Select(name='Y', value=default_key, options=single_value_keys)
+        #self.xvariable = pnw.Select(name='X', value='index', options=['index']+single_value_keys)
+        #self.colorvariable = pnw.Select(name='Color By', value=default_key, options=single_value_keys)
+        self.yvariable = pnw.Select(name='Y', value='GB/s', options=single_value_keys)
+        self.xvariable = pnw.Select(name='X', value='GB/s/W (system)', options=['index']+single_value_keys)
+        self.colorvariable = pnw.Select(name='Color By', value='GPU frequency (MHz)', options=single_value_keys)
 
         # connect widgets with the function that draws the scatter plot
         self.scatter = pn.bind(self.make_scatter, xvariable=self.xvariable, yvariable=self.yvariable, color_by=self.colorvariable)
@@ -87,7 +101,8 @@ class KTdashboard:
         self.dashboard.main.append(self.scatter)
 
     def __del__(self):
-        self.cache_file_handle.close()
+        if self.cache_file_handle is not None:
+            self.cache_file_handle.close()
 
     def notebook(self):
         """ Return a static version of the dashboard without the template """
@@ -106,7 +121,7 @@ class KTdashboard:
         y = yvariable
 
         f = figure(**self.plot_options)
-        f.circle(x, y, size=5, color=color, alpha=0.5, source=self.source)
+        f.circle(x, y, size=12, color=color, alpha=0.5, source=self.source)
         f.xaxis.axis_label = x
         f.yaxis.axis_label = y
 
@@ -140,38 +155,22 @@ class KTdashboard:
                 self.index += 1
 
 
-
-def print_usage():
-    print("Usage: ./dashboard.py [-demo] filename")
-    print("   -demo      option to enable demo mode that mimicks a running Kernel Tuner session")
-    print("   filename   name of the cachefile")
-    exit(0)
-
-
-
 def cli():
     """ implements the command-line interface to start the dashboard """
 
-    if len(sys.argv) < 2:
-        print_usage()
 
-    filename = ""
-    demo = False
-    if len(sys.argv) == 2:
-        if os.path.isfile(sys.argv[1]):
-            filename = sys.argv[1]
-        else:
-            print("Cachefile not found")
-            exit(1)
-    elif len(sys.argv) == 3:
-        if sys.argv[1] == "-demo":
-            demo = True
-        else:
-            print_usage()
-        if os.path.isfile(sys.argv[2]):
-            filename = sys.argv[2]
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--file", "-f", help="Path to cache file", required=True)
+    parser.add_argument("--demo", action="store_true", help="Enable demo mode that mimicks runnign a Kernel Tuner session")
+    parser.add_argument("--port", "-p", type=int, default=40000, help="Dashboard port (default: %(default)s")
 
-    db = KTdashboard(filename, demo=demo)
+    args = parser.parse_args()
+
+    if not os.path.isfile(args.file):
+        print("Cachefile not found")
+        exit(1)
+
+    db = KTdashboard(args.file, demo=args.demo)
 
     db.dashboard.servable()
 
@@ -179,7 +178,7 @@ def cli():
         """ wrapper function to add the callback, doesn't work without this construct """
         pn.state.add_periodic_callback(db.update_data, 1000)
         return db.dashboard
-    server = pn.serve(dashboard_f, show=False)
+    server = pn.serve(dashboard_f, port=args.port, websocket_origin='*', show=False)
 
 
 
